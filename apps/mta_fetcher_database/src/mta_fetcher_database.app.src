@@ -1,0 +1,14 @@
+{application, mta_fetcher_database,
+ [
+  {description, "Transit database pusher"},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  mnesia,
+                  lager
+                 ]},
+  {mod, { database, []}},
+  {env, []}
+ ]}.

@@ -1,0 +1,84 @@
+<?xml version="1.0" encoding="utf-8"?>
+<xsd:schema xmlns:xsd="http://www.w3.org/2001/XMLSchema"
+            xmlns:jxb="http://java.sun.com/xml/ns/jaxb"
+            jxb:version="2.0"
+            version="1.0"
+            elementFormDefault="unqualified"
+            attributeFormDefault="unqualified">
+
+    <xsd:annotation>
+        <xsd:documentation>
+            XSD created by Jim Doyle on Jan 2011 based on informal interface specification given in
+            http://www.eot.state.ma.us/developers/downloads/MBTA_XML_Feed_Trial_Docs_13Nov09.pdf
+        </xsd:documentation>
+        <xsd:appinfo>
+            <jxb:schemaBindings>
+                <jxb:package name="net.sf.nextbus.publicxmlfeed.xjcgenerated.prediction"/>
+            </jxb:schemaBindings>
+        </xsd:appinfo>
+    </xsd:annotation>
+
+
+    <xsd:complexType name="error">
+        <xsd:simpleContent>
+            <xsd:extension base="xsd:string">
+                <xsd:attribute name="shouldRetry" type="xsd:boolean" />
+            </xsd:extension>
+        </xsd:simpleContent>
+    </xsd:complexType>
+
+    <xsd:complexType name="direction">
+        <xsd:sequence>
+            <xsd:element name="prediction" maxOccurs="unbounded">
+                <xsd:complexType>
+                    <xsd:attribute name="seconds" type="xsd:integer"/>
+                    <xsd:attribute name="minutes" type="xsd:integer"/>
+                    <xsd:attribute name="epochTime" type="xsd:long"/>
+                    <xsd:attribute name="isDeparture" type="xsd:boolean"/>
+                    <xsd:attribute name="affectedByLayover" type="xsd:boolean"/>
+                    <xsd:attribute name="dirTag" type="xsd:string"/>
+                    <xsd:attribute name="slowness" type="xsd:float"/>
+                    <xsd:attribute name="vehicle" type="xsd:string"/>
+                    <xsd:attribute name="block" type="xsd:string"/>
+                    <xsd:attribute name="tripTag" type="xsd:string"/>
+                    <xsd:attribute name="delayed" type="xsd:boolean"/>
+                    <!-- Heck if I know what this is for. -->
+                    <xsd:attribute name="vehiclesInConsist" type="xsd:string"/>
+                </xsd:complexType>
+            </xsd:element>
+        </xsd:sequence>
+        <xsd:attribute name="title" type="xsd:string"/>
+    </xsd:complexType>
+
+
+    <!-- ad hoc messages regarding delays (i.e. snow) seem to now appear in the service payload ; this is not part of the written spec -->
+    <xsd:complexType name="message">
+        <xsd:attribute name="text" type="xsd:string"/>
+        <xsd:attribute name="priority" type="xsd:string"/>
+    </xsd:complexType>
+
+
+    <xsd:complexType name="predictions">
+        <xsd:sequence>
+            <xsd:element name="direction" type="direction" minOccurs="0" maxOccurs="unbounded"/>
+            <xsd:element name="message" type="message" minOccurs="0" maxOccurs="unbounded"/>
+        </xsd:sequence>
+        <xsd:attribute name="agencyTitle" type="xsd:string"/>
+        <xsd:attribute name="routeTitle" type="xsd:string"/>
+        <xsd:attribute name="routeTag" type="xsd:string"/>
+        <xsd:attribute name="stopTitle" type="xsd:string"/>
+        <xsd:attribute name="stopTag" type="xsd:string"/>
+        <xsd:attribute name="dirTitleBecauseNoPredictions" type="xsd:string"/>
+    </xsd:complexType>
+
+    <xsd:element name="body">
+        <xsd:complexType>
+            <xsd:sequence>
+                <xsd:element name="Error" type="error" minOccurs="0" maxOccurs="1"/>
+                <xsd:element name="predictions" type="predictions" minOccurs="0" maxOccurs="unbounded"/>
+            </xsd:sequence>
+            <xsd:attribute name="copyright" type="xsd:string"/>
+        </xsd:complexType>
+    </xsd:element>
+
+</xsd:schema>

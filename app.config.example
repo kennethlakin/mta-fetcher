@@ -1,0 +1,22 @@
+[{lager, [
+   {handlers, [
+      {lager_console_backend, info}
+      %Uncomment this if you want to write to syslog, too.
+      %,{lager_syslog_backend, ["transit-fetcher", local1, info]}
+    ]} 
+  ]},
+  {mta_fetcher, [
+     {fetch_profiles, [
+       %We might have problems with IPv6 addrs. Not sure.
+       {local, "0.0.0.0"}
+      ]},
+     {prediction_fetch_in_seconds, 20},
+     {vehicle_fetch_in_seconds, 10}
+  ]},
+  {mta_fetcher_database, [
+     {user, "user"},
+     {pass, "password"},
+     {host, "127.0.0.1"},
+     {database, "mta_fetcher"}
+  ]}
+].

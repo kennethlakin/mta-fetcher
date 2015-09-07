@@ -1,0 +1,15 @@
+{application, mta_fetcher,
+ [
+  {description, "Transit data fetcher"},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib,
+                  mnesia,
+                  inets,
+                  lager
+                 ]},
+  {mod, { mta_fetcher, []}},
+  {env, []}
+ ]}.
