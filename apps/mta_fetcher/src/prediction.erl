@@ -8,6 +8,8 @@
 -export([addRecord/1, startRunner/2, linked_runner/2]).
 %Housekeeping API
 -export([createTable/0, repeatMoveData/0]).
+%Debugging API
+-export([reportPredFetchHang/2]).
 
 -record(predictionQueryRecord, {queryTime :: erlang:timestamp(),
                        body :: body()}).
@@ -24,10 +26,19 @@ startRunner(Route, Stops) ->
   true=register(process:getChildName(?MODULE, Route), Pid),
   {ok, Pid}.
 
+reportPredFetchHang(Route, Pid) ->
+  lager:error("Prediction fetch hang for route=~p. Backtrace=~p", [Route, process_info(Pid, backtrace)]),
+  exit(Pid, prediction_fetch_hung).
+
 linked_runner(Route, Stops) ->
+  {ok, FetchHangTimer}=timer:apply_after(?SLEEPTIME, ?MODULE, reportPredFetchHang, [Route, self()]),
   Prediction=
-    try runQuery(Route, Stops)
+    try 
+      Pred=runQuery(Route, Stops),
+      {ok, cancel}=timer:cancel(FetchHangTimer),
+      Pred
     catch E={error, {http_error, Code}} ->
+      {ok, cancel}=timer:cancel(FetchHangTimer),
           case Code of
             500 -> ok;
             503 -> ok

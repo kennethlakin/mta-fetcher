@@ -13,6 +13,8 @@
 -export([addRecord/1, startRunner/2, linked_runner/2]).
 %Housekeeping API
 -export([createTable/0, repeatMoveData/0]).
+%Debugging API
+-export([reportVehicFetchHang/2]).
 
 -compile([{parse_transform, lager_transform}]).
 
@@ -25,15 +27,24 @@
 -define(SOCKET_CLOSE_RETRY_WAIT, 2000+?JITTER_TIME).
 -define(MNESIA_TABLE, vehicle).
 
+reportVehicFetchHang(Route, Pid) ->
+  lager:error("Vehicle fetch hang for route=~p. Backtrace=~p", [Route, process_info(Pid, backtrace)]),
+  exit(Pid, vehicle_fetch_hung).
+
 startRunner(Route, _) ->
   Pid=spawn_link(?MODULE, linked_runner, [Route, 0]),
   true=register(process:getChildName(?MODULE, Route), Pid),
   {ok, Pid}.
 
 linked_runner(Route, LastUpdateTime) ->
+  {ok, FetchHangTimer}=timer:apply_after(?SLEEPTIME, ?MODULE, reportVehicFetchHang, [Route, self()]),
   {Locations, UpdateTime}=
-    try runQuery(Route, LastUpdateTime)
+    try 
+      Ret=runQuery(Route, LastUpdateTime),
+      {ok, cancel}=timer:cancel(FetchHangTimer),
+      Ret
     catch E={error, {http_error, Code}} ->
+      {ok, cancel}=timer:cancel(FetchHangTimer),
           case Code of
             500 -> ok;
             503 -> ok
