@@ -164,7 +164,6 @@ moveData() ->
 	  {ok, NoPredictionExpr} = database:prepare(C, "NoPredictionInsert", "select nopredictioninsert($1, $2, $3, $4, $5, $6, $7)"),
     {ok, PredictionExpr} = database:prepare(C, "PredictionInsert", "select predictioninsert($1, $2, $3, $4, $5, $6, 
                $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)"),
-	  database:startTransaction(C),
 	  moveData(C, MessagesExpr, NoPredictionExpr, PredictionExpr, Key)
    end.
 
@@ -175,7 +174,6 @@ moveData(C, MessagesExpr, NoPredictionExpr, PredictionExpr, K) ->
   database:recordDelete(?MNESIA_TABLE, K),
   case Key == '$end_of_table' of
     true ->
-      database:commitTransaction(C),
       database:disconnect(C),
       done;
     false ->
@@ -268,15 +266,5 @@ handlePredictions(C, Predictions, MessagesExpr, NoPredictionExpr, PredictionExpr
                                     end,
                                     AccAfterPredictions, Messages)
                     end,
-                    ListLen=length(AccAfterMessages),
-                    %Our block size is currently 1000. This seems to be
-                    %reasonable. Higher block sizes don't seem to increase
-                    %perf.
-                    case ListLen >= 1000 of
-                      false ->
-                        AccAfterMessages;
-                      true ->
-                        database:doInsertData(C, AccAfterMessages),
-                        []
-                    end
+                    AccAfterMessages
                 end, QueryList, Predictions).

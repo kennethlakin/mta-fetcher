@@ -46,20 +46,24 @@ init([]) ->
   InNumSecs=10,
   {ok, 
    { {one_for_one, NumDeaths, InNumSecs}, [
-                                           #{id=>prediction_pusher, 
+                                           #{id=>prediction_db_pusher,
                                              start=>{database, predictionPusherStart, []},
                                              restart=>permanent}
-                                           ,#{id=>vehicle_pusher, 
+                                           ,#{id=>vehicle_db_pusher,
                                              start=>{database, vehiclePusherStart, []},
                                              restart=>permanent}
                                           ]}
   }.
 
 predictionPusherStart() ->
-  {ok, spawn_link(database, pusher, [prediction])}.
+  PID=spawn_link(database, pusher, [prediction]),
+  true=register(prediction_db_pusher, PID),
+  {ok, PID}.
 
 vehiclePusherStart() ->
-  {ok, spawn_link(database, pusher, [vehicle])}.
+  PID=spawn_link(database, pusher, [vehicle]),
+  true=register(vehicle_db_pusher, PID),
+  {ok, PID}.
 
 pusher(Module) ->
   T1=calendar:local_time(),
@@ -145,6 +149,16 @@ shootSelfInHead(C, Pid) ->
 %%%Or, yanno, just after we rewrite most of the code. :/
 
 doInsertData (C, QueryList) ->
+  doInsertData(C, QueryList, 0).
+
+%1000 is an arbitrary limit.
+doInsertData (C, _, 1000) ->
+  lager:error("doInsertData: Recursion limit hit!"),
+  database:rollbackTransaction(C),
+  throw({error, doInsertData_recursion_limit_hit});
+
+doInsertData (C, QueryList, NumRecursiveCalls) ->
+  database:startTransaction(C),
   %When prediction insert hangs, it hangs in a call to execute_batch.
   %%%FIXME: This is a temporary disconnect and suicide switch that kills ourself if
   %%%we've hung for too long. The root cause needs to be figured out.
@@ -152,28 +166,70 @@ doInsertData (C, QueryList) ->
   V=pgsql:execute_batch(C,  QueryList),
   %%%FIXME: Remove this cancel, too, once we figure out what is going on.
   {ok, cancel}=timer:cancel(SuicideSwitch),
-  verifyOkay(V).
-
-verifyOkay([]) ->
-  ok;
-verifyOkay([H|T]) ->
-  case H of
-    {ok, _ } ->
-      verifyOkay(T);
-    {Err, Thing} -> %FIXME: We should actually *deal with* these problems.
-      lager:warning("verifyOkay: row failed with {~p, ~p}", [Err, Thing]),
-      verifyOkay(T)
-  end;
-verifyOkay(SingleItem) ->
-  lager:warning("Strange. VerifyOkay only has a single item: ~p", [SingleItem]),
-  case SingleItem of
-    {ok, _ } ->
-      ok;
-    {Err, Thing} -> %FIXME: We should actually *deal with* these problems.
-      lager:warning("verifyOkay: row failed with {~p, ~p}", [Err, Thing]),
-      ok
+  
+  VLen=length(V),
+  QLen=length(QueryList),
+  {ResPlusQueryList, LeftoverQueries} =
+  %VLen should probably never be larger than QLen, so we leave it unhandled.
+  fun
+    () when VLen == QLen -> {lists:zip(V, QueryList), []};
+    %FIXME: Why can this happen?
+    %       And is it guaranteed that the queries in the query list
+    %       had been executed in order?!?
+    () when VLen < QLen ->
+      lager:warning("doInsertData: length(V) < length(QueryList)"),
+      {QTrimmed, QRest}=lists:split(VLen, QueryList),
+      {lists:zip(V, QTrimmed), QRest}
+  end (),
+  case verifyOkay(ResPlusQueryList) of
+    failed_transaction ->
+      lager:warning("doInsertData: Transaction failed. Rolling back and trying each row individually."),
+      database:rollbackTransaction(C),
+      lists:foreach(fun(Query) -> doInsertData(C, [Query]) end, QueryList, NumRecursiveCalls+1);
+    ResultList ->
+      database:commitTransaction(C),
+      RL=lists:foldl(fun
+                      (ok, A) -> A;
+                      %Retry txns with unexpected errors, because we don't know
+                      %what to do with them.
+                      ({unexpected_error, Txn}, A) ->
+                         lists:append(A, [Txn]);
+                      ({deadlock_detected, Txn}, A) -> 
+                         lager:warning("doInsertData: List contains detected deadlock that did not cause txn abort!"),
+                         lists:append(A, [Txn]);
+                      ({duplicate_key_value, Txn}, A) -> 
+                         lager:warning("doInsertData: List contains duplicate key value error"),
+                         lists:append(A, [Txn])
+                  end, [], ResultList),
+      RetryList=case LeftoverQueries of
+                  [] -> RL;
+                  _ -> 
+                    lager:warning("doInsertData: Appending leftover queries to the retry list"),
+                    lists:append(RL, LeftoverQueries)
+                end,
+      case RetryList of
+        [] -> ok;
+        _ -> 
+          lager:warning("doInsertData: Doing insert data again because of non-empty retry list."),
+          doInsertData(C, RetryList, NumRecursiveCalls+1)
+      end
   end.
 
+
+verifyOkay(ResultsAndStatements) ->
+  lists:foldl(fun
+                (_, failed_transaction) -> failed_transaction;
+                ({{ok, _}, _Txn}, Acc) -> lists:append(Acc, [ok]);
+                %Deadlocks *should* abort the txn, but we add this to the list 
+                %(and whine later) just in case one ever *doesn't* abort the txn.
+                ({{error, {error, error, <<"40P01">>, _Msg, _}}, Txn}, Acc) ->  lists:append(Acc, [{deadlock_detected, Txn}]);
+                ({{error, {error, error, <<"23505">>, _Msg, _}}, Txn}, Acc) ->  lists:append(Acc, [{duplicate_key_value, Txn}]);
+                ({{error, {error, error, <<"25P02">>, _Msg, _}},   _},   _) ->  failed_transaction;
+                %Better to warn the operator about an overlooked error code than to die.
+                ({{error, {error, error, ErrCode, Msg, _}}, Txn}, Acc) ->
+                  lager:warning("verifyOkay: Unexpected error! ~p: ~p", [ErrCode, Msg]),
+                  lists:append(Acc, [{unexpected_error, Txn}])
+              end, [], ResultsAndStatements).
 
 getFirst(Table) when is_atom(Table) ->
   {atomic, Key} = mnesia:transaction( fun() -> mnesia:first(Table) end),

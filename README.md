@@ -64,9 +64,7 @@ You should see notifications about the start of lager, mta_fetcher, and mta_fetc
 ## Caveats
 * mta_fetcher_database will almost certainly lose data if
   * It is stopped before it has moved all vehicle and prediction data from Mnesia to Postgres.
-  * It encounters an error of any kind while writing data to Postgres.
 * The Postgres schema (particularly the stored procedures) is not very good.
-  * You will almost *certainly* lose the first several minutes of the data in your *first* run (but not subsequent runs) due to Postgres transactions aborted due to deadlocks.
   * The current schema file is a pg_dump with the GRANT statement blocks removed and is pretty ugly.
 
 Addressing these caveats is on the TODO list.

@@ -147,7 +147,6 @@ moveData() ->
     false ->
          {_, _}=database:getRecord(?MNESIA_TABLE, Key),
          {ok, C} = database:connect(),
-         database:startTransaction(C),
          {ok, VehiclePosExpr} = database:prepare(C, "VehicleLocInsert", "select vehiclelocationinsert ($1, $2, $3, $4, 
                                                  $5, $6, $7, $8, $9, $10, $11, $12)"),
          moveData(C, VehiclePosExpr, Key)
@@ -160,7 +159,6 @@ moveData(C, VehiclePosExpr, K) ->
   database:recordDelete(?MNESIA_TABLE, K),
   case Key == '$end_of_table' of
     true ->
-      database:commitTransaction(C),
       database:disconnect(C),
       done;
     false ->
@@ -216,18 +214,7 @@ dataInsert(C, VehiclePosExpr, QueryList, [V|T]) ->
                                                                   database:nullConv(PosData#'vehicle-vehicle'.leadingVehicleId),
                                                                   database:nullConv(LastUpdateTime)]}])
                                          end, QueryList, VehicPosData),
-              %Our block size is currently 1000. This seems to be
-              %reasonable. Higher block sizes don't seem to increase
-              %perf.
-              ListLen=length(PosDataQueries),
-              case ListLen >= 1000 of
-                false ->
-                  QL=PosDataQueries;
-                true ->
-                  database:doInsertData(C, PosDataQueries),
-                  QL=[]
-              end,
-              dataInsert(C, VehiclePosExpr, QL, T)
+              dataInsert(C, VehiclePosExpr, PosDataQueries, T)
           end
       end
   end.
