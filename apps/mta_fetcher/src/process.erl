@@ -3,6 +3,8 @@
 -define(MODEL_SERVER_NAME, "Mta-Fetcher-Model-Server").
 -define(PROCESS_SUPERVISOR_NAME, process_sup).
 -define(FETCHER_MODULE_NAMES, [prediction, vehicle]).
+-define(TABLE_COPY_MGR_NAME, table_copy_mgr).
+-define(TABLE_COPY_TRANSITION_SIZE, 200).
 -compile([{parse_transform, lager_transform}]).
 -behaviour(supervisor).
 
@@ -12,10 +14,10 @@
 -export([diffLists/2, findDeleted/2, findAdded/2, findUnchanged/2, packageNewRouteList/1
         ,getSupervisorName/0, getFetcherModuleNames/0, getExpectedNumberOfRoutes/0
         ,determineErrorReason/1, getChildName/2, waitForTables/0]).
-%Fetcher start call:
--export([startFetchers/0]).
+%Internal child start API
+-export([startFetchers/0, startTableCopyMgr/0]).
 %Internal housekeeping API
--export([sitAndSpin/0]).
+-export([sitAndSpin/0, tableCopyMgrLoop/2]).
 %Debugging API
 -export([justStartXmlMonitor/0, createAllTables/0]).
 
@@ -118,9 +120,88 @@ init([]) ->
   %something terrible has gone wrong.
   NumDeaths=getExpectedNumberOfRoutes()*2*5,
   InNumSecs=1,
-  {ok, 
+  {ok,
    { #{strategy=>one_for_one, intensity=>NumDeaths, period=>InNumSecs}, []}
   }.
+
+tableIsTooLarge({P, V}) ->
+  P >= ?TABLE_COPY_TRANSITION_SIZE
+  orelse V >= ?TABLE_COPY_TRANSITION_SIZE.
+
+tableTransformOperation(LastFive, PVTuple) ->
+  case length(LastFive) >= 4 of
+    %We don't have enough info, so do nothing.
+    false -> {lists:append([PVTuple], LastFive), none};
+    true ->
+      {NewFive, _}=lists:split(5, lists:append([PVTuple], LastFive)),
+      {_, SmallEnough}=lists:partition(fun tableIsTooLarge/1, NewFive),
+      case length(SmallEnough) == 5 of
+        %If the last five size samples are small enough, convert to disc_copies.
+        true -> Operation=disc_copies;
+        %Else, if the last *two* sizes have been too large,
+        %then convert to disc_only_copies.
+        false ->
+          {LastTwo, _}=lists:split(2, NewFive),
+          TooLarge=lists:foldl(fun(PV, true) -> tableIsTooLarge(PV);
+                                  (_, false) -> false
+                               end, true, LastTwo),
+          case TooLarge of
+            true -> Operation=disc_only_copies;
+            false -> Operation=disc_copies
+          end
+      end,
+      {NewFive, Operation}
+  end.
+
+maybeTransformTable(CopyType) ->
+  case CopyType of
+    none -> ok;
+    _ ->
+      PNodes=mnesia:table_info(prediction, CopyType),
+      VNodes=mnesia:table_info(vehicle, CopyType),
+      Node=node(),
+      case lists:member(Node, PNodes) andalso
+           lists:member(Node, VNodes) of
+        true ->
+          lager:debug("TableCopyMgr: Already converted to type ~p", [CopyType]),
+          ok;
+        false ->
+          lager:debug("TableCopyMgr: Converting to type ~p", [CopyType]),
+          {atomic, ok}=mnesia:change_table_copy_type(prediction, node(), CopyType),
+          {atomic, ok}=mnesia:change_table_copy_type(vehicle, node(), CopyType)
+      end
+  end.
+
+tableCopyMgrLoop(LastFive, UpdateTime) ->
+  timer:sleep(timer:seconds(1)),
+  PredSize=mnesia:table_info(prediction, size),
+  VehicSize=mnesia:table_info(vehicle, size),
+  {NewFive, Operation}=tableTransformOperation(LastFive, {PredSize, VehicSize}),
+  case erlang:system_time(milli_seconds) >= UpdateTime of
+    false -> NewUpdateTime=UpdateTime;
+    true ->
+      case Operation of
+        disc_only_copies -> Delay=timer:minutes(5);
+        disc_copies -> Delay=timer:seconds(20);
+        none -> Delay=0
+      end,
+      maybeTransformTable(Operation),
+      NewUpdateTime=erlang:system_time(milli_seconds)+Delay
+  end,
+  tableCopyMgrCheckMsgs(),
+  ?MODULE:tableCopyMgrLoop(NewFive, NewUpdateTime).
+
+tableCopyMgrCheckMsgs() ->
+  receive Unexpected ->
+            lager:warning("TableCopyMgr: Unexpected message ~p", [Unexpected]),
+            tableCopyMgrCheckMsgs()
+  after 0 -> ok
+  end.
+
+startTableCopyMgr() ->
+  Pid=spawn_link(?MODULE, tableCopyMgrLoop, [[], 0]),
+  true=register(?TABLE_COPY_MGR_NAME, Pid),
+  {ok, Pid}.
 
 %Start the position and prediction fetchers.
 startFetchers() ->
@@ -135,6 +216,8 @@ startFetchers() ->
   ok=mnesia:start(),
   %Ensure tables are loaded.
   ok=waitForTables(),
+  %Start our table copy manager
+  superviseTableCopyManager(),
   %Start our RouteList supervisor and fetcher:
   {ok, _}=supervisor:start_link({local, routeList:getSupervisorName()}, routeList, []),
   sitAndSpin().
@@ -143,6 +226,12 @@ superviseModelServer() ->
   {ok, _}=supervisor:start_child(getSupervisorName(),
                              #{id=>?MODEL_SERVER_NAME
                                ,start=>{model_srv, start_link, []}
+                               ,restart=>permanent}).
+
+superviseTableCopyManager() ->
+  {ok, _}=supervisor:start_child(getSupervisorName(),
+                             #{id=>?TABLE_COPY_MGR_NAME
+                               ,start=>{process, startTableCopyMgr, []}
                                ,restart=>permanent}).
 
 sitAndSpin() ->
