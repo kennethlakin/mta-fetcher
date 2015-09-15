@@ -155,7 +155,7 @@ tableTransformOperation(LastFive, PVTuple) ->
 
 maybeTransformTable(CopyType) ->
   case CopyType of
-    none -> ok;
+    none -> noconvert;
     _ ->
       PNodes=mnesia:table_info(prediction, CopyType),
       VNodes=mnesia:table_info(vehicle, CopyType),
@@ -164,11 +164,12 @@ maybeTransformTable(CopyType) ->
            lists:member(Node, VNodes) of
         true ->
           lager:debug("TableCopyMgr: Already converted to type ~p", [CopyType]),
-          ok;
+          noconvert;
         false ->
           lager:debug("TableCopyMgr: Converting to type ~p", [CopyType]),
           {atomic, ok}=mnesia:change_table_copy_type(prediction, node(), CopyType),
-          {atomic, ok}=mnesia:change_table_copy_type(vehicle, node(), CopyType)
+          {atomic, ok}=mnesia:change_table_copy_type(vehicle, node(), CopyType),
+          converted
       end
   end.
 
@@ -180,12 +181,14 @@ tableCopyMgrLoop(LastFive, UpdateTime) ->
   case erlang:system_time(milli_seconds) >= UpdateTime of
     false -> NewUpdateTime=UpdateTime;
     true ->
-      case Operation of
-        disc_only_copies -> Delay=timer:minutes(5);
-        disc_copies -> Delay=timer:seconds(20);
-        none -> Delay=0
+      case maybeTransformTable(Operation) of
+        noconvert -> Delay=0;
+        converted ->
+          case Operation of
+            disc_only_copies -> Delay=timer:minutes(5);
+            disc_copies -> Delay=timer:seconds(20)
+          end
       end,
-      maybeTransformTable(Operation),
       NewUpdateTime=erlang:system_time(milli_seconds)+Delay
   end,
   tableCopyMgrCheckMsgs(),
